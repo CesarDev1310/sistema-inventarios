@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Sistema de gestión y registro de inventario con Node.js, Supabase, verificación de SKU, stock y carga segura de imágenes PNG.">
+  <title>Sistema de Registro de Inventario | Supabase & Node.js</title>
+  
+  <!-- Tipografía moderna Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- Estilos Vanilla CSS -->
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <!-- Fondo con efecto de gradiente ambiental -->
+  <div class="ambient-glow glow-top"></div>
+  <div class="ambient-glow glow-bottom"></div>
+
+  <!-- Contenedor Principal -->
+  <div class="app-layout">
+    
+    <!-- Encabezado de la Aplicación -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">Gestión de Inventario</h1>
+          <p class="brand-subtitle">Módulo full stack con validación estricta y Supabase Storage</p>
+        </div>
+      </div>
+
+      <!-- Estado de Conexión -->
+      <div class="connection-status" id="connection-status" title="Estado de la base de datos">
+        <span class="status-dot"></span>
+        <span class="status-text" id="status-text">Verificando conexión...</span>
+      </div>
+    </header>
+
+    <!-- Contenido en 2 Columnas -->
+    <main class="main-grid">
+      
+      <!-- Columna Izquierda: Formulario de Registro -->
+      <section class="card form-card">
+        <div class="card-header">
+          <div class="card-badge">Nuevo Registro</div>
+          <h2 class="card-title">Registrar Producto</h2>
+          <p class="card-desc">Ingresa el código SKU alfanumérico, las existencias y la fotografía oficial en formato PNG.</p>
+        </div>
+
+        <form id="inventory-form" class="inventory-form" novalidate>
+          
+          <!-- Campo 1: SKU -->
+          <div class="form-group">
+            <label for="sku-input" class="form-label">
+              <span>Código SKU</span>
+              <span class="label-badge">Alfanumérico</span>
+            </label>
+            <div class="input-wrapper">
+              <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
+              </svg>
+              <input
+                type="text"
+                id="sku-input"
+                name="sku"
+                class="form-input text-mono"
+                placeholder="EJ: PROD-A100-X"
+                maxlength="50"
+                autocomplete="off"
+                required
+              />
+            </div>
+            <span class="input-hint" id="sku-hint">Mínimo 3 caracteres alfanuméricos o guiones (- _).</span>
+          </div>
+
+          <!-- Campo 2: Stock -->
+          <div class="form-group">
+            <label for="stock-input" class="form-label">
+              <span>Existencias (Stock)</span>
+              <span class="label-badge">Entero &ge; 0</span>
+            </label>
+            <div class="input-wrapper">
+              <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
+                <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+              </svg>
+              <input
+                type="number"
+                id="stock-input"
+                name="stock"
+                class="form-input text-mono"
+                placeholder="0"
+                min="0"
+                step="1"
+                required
+              />
+            </div>
+            <span class="input-hint" id="stock-hint">Solo números enteros positivos o cero.</span>
+          </div>
+
+          <!-- Campo 3: Foto en PNG -->
+          <div class="form-group">
+            <label class="form-label">
+              <span>Fotografía del Artículo</span>
+              <span class="label-badge badge-accent">Solo PNG (.png)</span>
+            </label>
+
+            <!-- Zona Drag and Drop -->
+            <div class="dropzone" id="dropzone">
+              <input
+                type="file"
+                id="image-input"
+                name="image"
+                accept="image/png"
+                class="file-input-hidden"
+                required
+              />
+              
+              <!-- Vista previa antes de subir -->
+              <div class="dropzone-preview hidden" id="dropzone-preview">
+                <img id="preview-image" src="" alt="Previsualización de imagen del artículo" class="preview-img" />
+                <div class="preview-info">
+                  <span class="preview-name" id="preview-name">foto.png</span>
+                  <span class="preview-meta" id="preview-meta">0 KB &bull; PNG</span>
+                </div>
+                <button type="button" class="btn-remove" id="btn-remove-image" title="Eliminar y seleccionar otra">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+
+              <!-- Estado inicial / instrucciones de carga -->
+              <div class="dropzone-content" id="dropzone-content">
+                <div class="dropzone-icon">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                </div>
+                <p class="dropzone-text"><strong>Haz clic para examinar</strong> o arrastra un archivo PNG aquí</p>
+                <p class="dropzone-sub">Formato PNG garantizado &bull; Máx. 5 MB</p>
+              </div>
+            </div>
+            <span class="input-hint" id="image-hint">Se validará el encabezado binario para máxima seguridad.</span>
+          </div>
+
+          <!-- Botón de Envío -->
+          <button type="submit" id="btn-submit" class="btn btn-primary">
+            <span class="btn-text">Registrar en Inventario</span>
+            <span class="btn-spinner hidden" id="btn-spinner"></span>
+            <svg class="btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </button>
+        </form>
+      </section>
+
+      <!-- Columna Derecha: Catálogo y Métricas -->
+      <section class="card list-card">
+        <div class="card-header">
+          <div class="header-between">
+            <div>
+              <div class="card-badge badge-muted">Stock en Tiempo Real</div>
+              <h2 class="card-title">Artículos Registrados</h2>
+            </div>
+            <!-- Botón Refrescar -->
+            <button type="button" id="btn-refresh" class="btn-icon-action" title="Actualizar catálogo">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6"></path>
+                <path d="M1 20v-6h6"></path>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Métricas Resumen -->
+          <div class="metrics-bar">
+            <div class="metric-item">
+              <span class="metric-label">Total SKUs</span>
+              <span class="metric-value text-mono" id="metric-total-skus">0</span>
+            </div>
+            <div class="metric-divider"></div>
+            <div class="metric-item">
+              <span class="metric-label">Unidades en Stock</span>
+              <span class="metric-value text-mono" id="metric-total-stock">0</span>
+            </div>
+          </div>
+
+          <!-- Filtro de Búsqueda Rápida -->
+          <div class="search-box">
+            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input
+              type="text"
+              id="search-input"
+              class="search-input"
+              placeholder="Filtrar por SKU..."
+              autocomplete="off"
+            />
+          </div>
+        </div>
+
+        <!-- Lista de Artículos -->
+        <div class="inventory-list" id="inventory-list">
+          <!-- Renderizado dinámico vía JavaScript -->
+          <div class="list-placeholder" id="list-placeholder">
+            <div class="placeholder-spinner"></div>
+            <p>Cargando artículos de inventario...</p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Pie de página -->
+    <footer class="app-footer">
+      <p>Módulo de Inventario con Arquitectura Modular &bull; Persistencia Supabase &bull; Node.js &bull; HTML5 + Vanilla JS</p>
+    </footer>
+
+  </div>
+
+  <!-- Contenedor de Notificaciones Toast -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Script Principal de la Aplicación -->
+  <script src="js/app.js"></script>
+</body>
+</html>

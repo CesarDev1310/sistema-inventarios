@@ -5,9 +5,9 @@
 
 import fs from 'fs';
 import path from 'path';
-import app from '../src/server.js';
 
 process.env.NODE_ENV = 'test';
+const { default: app } = await import('../src/server.js');
 
 const runTests = async () => {
   const server = app.listen(0);
@@ -146,6 +146,85 @@ const runTests = async () => {
     const listRes = await fetch(`${baseUrl}/api/inventory`);
     const listData = await listRes.json();
     assert(listRes.status === 200 && Array.isArray(listData.data) && listData.data.length >= 3, '4. GET /api/inventory devuelve lista estructurada de productos');
+
+    // --------------------------------------------------------------------------
+    // Test 5.1: Edición Exitosa (Sin cambiar imagen PNG)
+    // --------------------------------------------------------------------------
+    const itemToEditId = data1.data?.id;
+    const originalImageUrl = data1.data?.image_url;
+    const formEdit1 = new FormData();
+    formEdit1.append('sku', 'PROD-A100-EDITED');
+    formEdit1.append('stock', '99');
+
+    const resEdit1 = await fetch(`${baseUrl}/api/inventory/${itemToEditId}`, { method: 'PUT', body: formEdit1 });
+    const dataEdit1 = await resEdit1.json();
+    assert(
+      resEdit1.status === 200 &&
+      dataEdit1.success === true &&
+      dataEdit1.data?.sku === 'PROD-A100-EDITED' &&
+      dataEdit1.data?.stock === 99 &&
+      dataEdit1.data?.image_url === originalImageUrl,
+      '5.1 Edición Exitosa: Actualiza SKU y stock conservando imagen PNG original (HTTP 200)'
+    );
+
+    // --------------------------------------------------------------------------
+    // Test 5.2: Edición Exitosa (Reemplazando imagen PNG)
+    // --------------------------------------------------------------------------
+    const formEdit2 = new FormData();
+    formEdit2.append('sku', 'PROD-A100-EDITED');
+    formEdit2.append('stock', '50');
+    formEdit2.append('image', new Blob([validPngBuffer], { type: 'image/png' }), 'updated.png');
+
+    const resEdit2 = await fetch(`${baseUrl}/api/inventory/${itemToEditId}`, { method: 'PUT', body: formEdit2 });
+    const dataEdit2 = await resEdit2.json();
+    assert(
+      resEdit2.status === 200 &&
+      dataEdit2.success === true &&
+      dataEdit2.data?.stock === 50,
+      '5.2 Edición Exitosa: Reemplaza imagen PNG válida y actualiza stock (HTTP 200)'
+    );
+
+    // --------------------------------------------------------------------------
+    // Test 5.3: Validación Negativa en Edición - Conflicto con otro SKU existente
+    // --------------------------------------------------------------------------
+    const formEdit3 = new FormData();
+    formEdit3.append('sku', 'PROD-ZERO-01'); // Pertenece al artículo creado en Test 3.1
+    formEdit3.append('stock', '10');
+
+    const resEdit3 = await fetch(`${baseUrl}/api/inventory/${itemToEditId}`, { method: 'PUT', body: formEdit3 });
+    const dataEdit3 = await resEdit3.json();
+    assert(
+      resEdit3.status === 409 && dataEdit3.success === false,
+      '5.3 Validación Negativa en Edición: Colisión con SKU de otro producto retorna HTTP 409'
+    );
+
+    // --------------------------------------------------------------------------
+    // Test 5.4: Validación Negativa en Edición - Stock negativo
+    // --------------------------------------------------------------------------
+    const formEdit4 = new FormData();
+    formEdit4.append('sku', 'PROD-A100-EDITED');
+    formEdit4.append('stock', '-10');
+
+    const resEdit4 = await fetch(`${baseUrl}/api/inventory/${itemToEditId}`, { method: 'PUT', body: formEdit4 });
+    const dataEdit4 = await resEdit4.json();
+    assert(
+      resEdit4.status === 400 && dataEdit4.success === false,
+      '5.4 Validación Negativa en Edición: Stock negativo rechazado con HTTP 400'
+    );
+
+    // --------------------------------------------------------------------------
+    // Test 5.5: Caso Límite en Edición - ID de producto inexistente
+    // --------------------------------------------------------------------------
+    const formEdit5 = new FormData();
+    formEdit5.append('sku', 'PROD-GHOST-01');
+    formEdit5.append('stock', '10');
+
+    const resEdit5 = await fetch(`${baseUrl}/api/inventory/id-inexistente-999`, { method: 'PUT', body: formEdit5 });
+    const dataEdit5 = await resEdit5.json();
+    assert(
+      resEdit5.status === 404 && dataEdit5.success === false,
+      '5.5 Caso Límite en Edición: Producto inexistente retorna HTTP 404'
+    );
 
   } catch (error) {
     console.error('Error durante la ejecución del test suite:', error);

@@ -244,3 +244,232 @@ export const getInventoryItems = async (req, res) => {
     });
   }
 };
+
+/**
+ * Controlador para Editar un artículo existente en el inventario
+ * PUT /api/inventory/:id
+ */
+export const updateInventoryItem = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sku, stock } = req.body;
+    const file = req.file;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'El identificador (ID) del producto es obligatorio.'
+      });
+    }
+
+    // 1. Validación de presencia de campos obligatorios (sku y stock)
+    if (!sku || stock === undefined || stock === null || stock === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Los campos SKU y stock son requeridos para actualizar el producto.'
+      });
+    }
+
+    // 2. Normalización y validación del SKU
+    const normalizedSku = sku.trim().toUpperCase();
+    if (!isValidSku(normalizedSku)) {
+      return res.status(400).json({
+        success: false,
+        error: 'El código SKU debe ser alfanumérico (letras, números o guiones) entre 3 y 50 caracteres.'
+      });
+    }
+
+    // 3. Validación del Stock
+    if (!isValidStock(stock)) {
+      return res.status(400).json({
+        success: false,
+        error: 'El stock debe ser un número entero positivo o cero (sin decimales ni signos negativos).'
+      });
+    }
+    const parsedStock = parseInt(stock, 10);
+
+    // 4. Si se adjuntó una nueva imagen, validar Magic Bytes PNG
+    if (file && !validatePngMagicBytes(file.buffer)) {
+      return res.status(400).json({
+        success: false,
+        error: 'El archivo subido no es una imagen PNG válida (encabezado binario corrupto o formato no permitido).'
+      });
+    }
+
+    // ==============================================================================
+    // PERSISTENCIA: VÍA SUPABASE (SI ESTÁ CONFIGURADO)
+    // ==============================================================================
+    if (isSupabaseConfigured && supabase) {
+      // 5. Verificar que el producto exista
+      const { data: currentItem, error: findError } = await supabase
+        .from('inventory_items')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (findError) {
+        if (findError.code === '22P02') {
+          return res.status(404).json({
+            success: false,
+            error: 'Artículo no encontrado en el inventario.'
+          });
+        }
+        console.error('Error al buscar producto por ID en Supabase:', findError);
+        return res.status(500).json({
+          success: false,
+          error: 'Error interno al consultar el producto en la base de datos.'
+        });
+      }
+
+      if (!currentItem) {
+        return res.status(404).json({
+          success: false,
+          error: 'Artículo no encontrado en el inventario.'
+        });
+      }
+
+      // 6. Verificar que el SKU no colisione con otro artículo distinto
+      if (normalizedSku !== currentItem.sku) {
+        const { data: conflictingItem, error: conflictError } = await supabase
+          .from('inventory_items')
+          .select('id, sku')
+          .eq('sku', normalizedSku)
+          .neq('id', id)
+          .maybeSingle();
+
+        if (conflictError) {
+          console.error('Error al verificar unicidad de SKU en Supabase:', conflictError);
+          return res.status(500).json({
+            success: false,
+            error: 'Error interno al validar unicidad del SKU.'
+          });
+        }
+
+        if (conflictingItem) {
+          return res.status(409).json({
+            success: false,
+            error: `El código SKU "${normalizedSku}" ya pertenece a otro artículo del inventario.`
+          });
+        }
+      }
+
+      let nextImageUrl = currentItem.image_url;
+      let uploadedStoragePath = null;
+
+      // 7. Si se subió una nueva imagen PNG, guardarla en Supabase Storage
+      if (file) {
+        const sanitizedFileName = `${normalizedSku}-${Date.now()}.png`;
+        uploadedStoragePath = `products/${sanitizedFileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from(SUPABASE_BUCKET)
+          .upload(uploadedStoragePath, file.buffer, {
+            contentType: 'image/png',
+            upsert: false
+          });
+
+        if (uploadError) {
+          console.error('Error al subir nueva imagen a Supabase Storage:', uploadError);
+          return res.status(500).json({
+            success: false,
+            error: `Error al almacenar la nueva imagen en el bucket "${SUPABASE_BUCKET}": ${uploadError.message}`
+          });
+        }
+
+        const { data: urlData } = supabase.storage
+          .from(SUPABASE_BUCKET)
+          .getPublicUrl(uploadedStoragePath);
+
+        nextImageUrl = urlData.publicUrl;
+      }
+
+      // 8. Actualizar registro en inventory_items
+      const { data: updatedItem, error: updateError } = await supabase
+        .from('inventory_items')
+        .update({
+          sku: normalizedSku,
+          stock: parsedStock,
+          image_url: nextImageUrl,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('Error al actualizar en BD:', updateError);
+        if (uploadedStoragePath) {
+          await supabase.storage.from(SUPABASE_BUCKET).remove([uploadedStoragePath]);
+        }
+
+        if (updateError.code === '23505') {
+          return res.status(409).json({
+            success: false,
+            error: `El código SKU "${normalizedSku}" ya existe en otro producto.`
+          });
+        }
+
+        return res.status(500).json({
+          success: false,
+          error: 'Error al actualizar el producto en la base de datos.'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Artículo actualizado exitosamente en Supabase.',
+        data: updatedItem,
+        source: 'supabase'
+      });
+    }
+
+    // ==============================================================================
+    // PERSISTENCIA: MODO RESPALDO / DEMO (SIN SUPABASE CONFIGURADO)
+    // ==============================================================================
+    const itemIndex = inMemoryInventory.findIndex((item) => item.id === id);
+    if (itemIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        error: 'Artículo no encontrado en el inventario.'
+      });
+    }
+
+    const skuConflict = inMemoryInventory.some(
+      (item, idx) => idx !== itemIndex && item.sku === normalizedSku
+    );
+    if (skuConflict) {
+      return res.status(409).json({
+        success: false,
+        error: `El código SKU "${normalizedSku}" ya pertenece a otro artículo del inventario.`
+      });
+    }
+
+    const currentItem = inMemoryInventory[itemIndex];
+    const updatedImageUrl = file
+      ? `data:image/png;base64,${file.buffer.toString('base64')}`
+      : currentItem.image_url;
+
+    const updatedItem = {
+      ...currentItem,
+      sku: normalizedSku,
+      stock: parsedStock,
+      image_url: updatedImageUrl,
+      updated_at: new Date().toISOString()
+    };
+
+    inMemoryInventory[itemIndex] = updatedItem;
+
+    return res.status(200).json({
+      success: true,
+      message: 'Artículo actualizado exitosamente.',
+      data: updatedItem,
+      source: 'memory_demo'
+    });
+  } catch (error) {
+    console.error('Error no controlado en updateInventoryItem:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Ocurrió un error inesperado al actualizar el producto.'
+    });
+  }
+};

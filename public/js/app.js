@@ -7,6 +7,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // ==============================================================================
   // ELEMENTOS DEL DOM
   // ==============================================================================
+  const formCard = document.getElementById('form-card');
+  const formBadge = document.getElementById('form-badge');
+  const formTitle = document.getElementById('form-title');
+  const formDesc = document.getElementById('form-desc');
   const inventoryForm = document.getElementById('inventory-form');
   const skuInput = document.getElementById('sku-input');
   const stockInput = document.getElementById('stock-input');
@@ -19,7 +23,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const previewMeta = document.getElementById('preview-meta');
   const btnRemoveImage = document.getElementById('btn-remove-image');
   const btnSubmit = document.getElementById('btn-submit');
+  const btnSubmitText = document.getElementById('btn-submit-text');
   const btnSpinner = document.getElementById('btn-spinner');
+  const btnCancelEdit = document.getElementById('btn-cancel-edit');
   const btnRefresh = document.getElementById('btn-refresh');
   const inventoryList = document.getElementById('inventory-list');
   const searchInput = document.getElementById('search-input');
@@ -32,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Estado local en memoria
   let currentInventory = [];
   let selectedFile = null;
+  let editingItem = null;
 
   // ==============================================================================
   // VERIFICACIÓN DEL ESTADO DEL SISTEMA (HEALTH CHECK)
@@ -162,6 +169,76 @@ document.addEventListener('DOMContentLoaded', () => {
     clearImage();
   });
 
+  // ==============================================================================
+  // GESTIÓN DE MODO EDICIÓN
+  // ==============================================================================
+  const startEditItem = (item) => {
+    if (!item) return;
+    editingItem = item;
+    selectedFile = null;
+    imageInput.value = '';
+
+    // Poblar campos del formulario
+    skuInput.value = item.sku;
+    stockInput.value = item.stock;
+
+    // Mostrar vista previa de la imagen actual
+    previewImage.src = item.image_url;
+    previewName.textContent = `Imagen actual (${item.sku})`;
+    previewMeta.textContent = 'Se conservará si no seleccionas otro PNG';
+    dropzoneContent.classList.add('hidden');
+    dropzonePreview.classList.remove('hidden');
+
+    // Actualizar encabezados y botones del formulario
+    if (formCard) formCard.classList.add('is-editing-card');
+    if (formBadge) {
+      formBadge.textContent = 'Modo Edición';
+      formBadge.classList.add('badge-warning');
+    }
+    if (formTitle) formTitle.textContent = 'Editar Producto';
+    if (formDesc) {
+      formDesc.textContent = `Modificando el artículo ${item.sku}. Puedes actualizar el SKU, las existencias o reemplazar la fotografía PNG.`;
+    }
+    if (btnSubmitText) btnSubmitText.textContent = 'Guardar Cambios';
+    if (btnCancelEdit) btnCancelEdit.classList.remove('hidden');
+
+    // Re-renderizar catálogo para resaltar la tarjeta en edición
+    applyFilterAndRender();
+
+    // Desplazar suavemente hacia el formulario y enfocar stock
+    if (formCard && typeof formCard.scrollIntoView === 'function') {
+      formCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    stockInput.focus();
+  };
+
+  const cancelEditMode = () => {
+    editingItem = null;
+    inventoryForm.reset();
+    clearImage();
+
+    if (formCard) formCard.classList.remove('is-editing-card');
+    if (formBadge) {
+      formBadge.textContent = 'Nuevo Registro';
+      formBadge.classList.remove('badge-warning');
+    }
+    if (formTitle) formTitle.textContent = 'Registrar Producto';
+    if (formDesc) {
+      formDesc.textContent = 'Ingresa el código SKU alfanumérico, las existencias y la fotografía oficial en formato PNG.';
+    }
+    if (btnSubmitText) btnSubmitText.textContent = 'Registrar en Inventario';
+    if (btnCancelEdit) btnCancelEdit.classList.add('hidden');
+
+    applyFilterAndRender();
+  };
+
+  if (btnCancelEdit) {
+    btnCancelEdit.addEventListener('click', () => {
+      cancelEditMode();
+      showToast('Edición cancelada.', 'warning', 'Modo Registro');
+    });
+  }
+
   // Drag and Drop
   ['dragenter', 'dragover'].forEach((eventName) => {
     dropzone.addEventListener(eventName, (e) => {
@@ -247,8 +324,10 @@ document.addEventListener('DOMContentLoaded', () => {
         stockText = `Bajo (${stockNum})`;
       }
 
+      const isEditingThis = editingItem && editingItem.id === item.id;
+
       return `
-        <article class="inventory-item-card" data-sku="${escapeHtml(item.sku)}">
+        <article class="inventory-item-card ${isEditingThis ? 'is-editing' : ''}" data-sku="${escapeHtml(item.sku)}" data-id="${escapeHtml(item.id)}">
           <div class="item-thumb-wrapper">
             <img 
               src="${escapeHtml(item.image_url)}" 
@@ -260,19 +339,37 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div class="item-details">
             <h3 class="item-sku text-mono">${escapeHtml(item.sku)}</h3>
-            <span class="item-date">${formatDate(item.created_at)}</span>
+            <span class="item-date">${formatDate(item.updated_at || item.created_at)}</span>
           </div>
           <div class="item-stock-badge">
             <span class="stock-pill ${stockClass} text-mono">${stockText}</span>
+            <button type="button" class="btn-edit-item" data-edit-id="${escapeHtml(item.id)}" title="Editar ${escapeHtml(item.sku)}">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+              </svg>
+              <span>Editar</span>
+            </button>
           </div>
         </article>
       `;
     }).join('');
   };
 
-  // Filtrado reactivo en tiempo real
-  searchInput.addEventListener('input', (e) => {
-    const query = e.target.value.trim().toUpperCase();
+  // Delegación de evento para botón Editar en las tarjetas
+  inventoryList.addEventListener('click', (e) => {
+    const editBtn = e.target.closest('.btn-edit-item');
+    if (!editBtn) return;
+
+    const itemId = editBtn.getAttribute('data-edit-id');
+    const itemToEdit = currentInventory.find((i) => String(i.id) === String(itemId));
+    if (itemToEdit) {
+      startEditItem(itemToEdit);
+    }
+  });
+
+  const applyFilterAndRender = () => {
+    const query = searchInput.value.trim().toUpperCase();
     if (!query) {
       renderInventoryList(currentInventory);
       return;
@@ -282,6 +379,11 @@ document.addEventListener('DOMContentLoaded', () => {
       item.sku.toUpperCase().includes(query)
     );
     renderInventoryList(filtered);
+  };
+
+  // Filtrado reactivo en tiempo real
+  searchInput.addEventListener('input', () => {
+    applyFilterAndRender();
   });
 
   btnRefresh.addEventListener('click', () => {
@@ -315,8 +417,9 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // 3. Validación de Archivo PNG
-    if (!selectedFile) {
+    // 3. Validación de Archivo PNG (Obligatorio en registro nuevo, opcional en edición)
+    const isEditMode = Boolean(editingItem && editingItem.id);
+    if (!isEditMode && !selectedFile) {
       showToast('Debes seleccionar o arrastrar una fotografía en formato PNG.', 'error', 'Foto Requerida');
       return;
     }
@@ -325,35 +428,48 @@ document.addEventListener('DOMContentLoaded', () => {
     const formData = new FormData();
     formData.append('sku', skuValue);
     formData.append('stock', parsedStock);
-    formData.append('image', selectedFile);
+    if (selectedFile) {
+      formData.append('image', selectedFile);
+    }
 
     // Estado visual de carga
     setSubmittingState(true);
 
     try {
-      const response = await fetch('/api/inventory', {
-        method: 'POST',
+      const endpoint = isEditMode
+        ? `/api/inventory/${encodeURIComponent(editingItem.id)}`
+        : '/api/inventory';
+      const method = isEditMode ? 'PUT' : 'POST';
+
+      const response = await fetch(endpoint, {
+        method,
         body: formData
       });
 
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Error al procesar el registro del producto.');
+        throw new Error(
+          result.error ||
+          (isEditMode ? 'Error al actualizar el producto.' : 'Error al procesar el registro del producto.')
+        );
       }
 
       // Éxito: notificación y actualización de datos
-      showToast(result.message || 'Artículo registrado exitosamente.', 'success', '¡Registrado!');
+      showToast(
+        result.message || (isEditMode ? 'Artículo actualizado exitosamente.' : 'Artículo registrado exitosamente.'),
+        'success',
+        isEditMode ? '¡Actualizado!' : '¡Registrado!'
+      );
       
-      // Limpiar formulario y archivo
-      inventoryForm.reset();
-      clearImage();
+      // Limpiar formulario, archivo y salir de modo edición si estaba activo
+      cancelEditMode();
 
       // Recargar catálogo de inventario
       await fetchInventory();
 
     } catch (err) {
-      showToast(err.message, 'error', 'Error en el Registro');
+      showToast(err.message, 'error', isEditMode ? 'Error al Editar' : 'Error en el Registro');
     } finally {
       setSubmittingState(false);
     }

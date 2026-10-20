@@ -51,6 +51,15 @@ FOR INSERT
 TO public
 WITH CHECK (true);
 
+-- Política de actualización de inventario (edición de SKU, stock e imagen)
+DROP POLICY IF EXISTS "Permitir actualizacion de inventario" ON public.inventory_items;
+CREATE POLICY "Permitir actualizacion de inventario"
+ON public.inventory_items
+FOR UPDATE
+TO public
+USING (true)
+WITH CHECK (true);
+
 -- ==============================================================================
 -- 5. Configuración de Supabase Storage para Imágenes (Bucket: inventory-images)
 -- ==============================================================================

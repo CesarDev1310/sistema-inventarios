@@ -20,7 +20,18 @@ Módulo integral de registro y gestión de inventario desarrollado bajo estánda
 | :--- | :--- | :--- | :--- |
 | **SKU** | `sku` | `sku` (`VARCHAR(50)`) | Alfanumérico (`^[A-Za-z0-9\-_]{3,50}$`), único (`UNIQUE`), no nulo. Normalización automática a mayúsculas y trim. |
 | **Stock** | `stock` | `stock` (`INTEGER`) | Obligatorio, número entero positivo o cero (`CHECK (stock >= 0)`). No permite decimales ni negativos. |
-| **Foto** | `image` (file) | `image_url` (`TEXT`) | Obligatorio. Formato estricto **PNG** (`image/png`), máx. 5 MB. Verificación binaria de encabezado (*Magic Bytes*). |
+| **Foto** | `image` (file) | `image_url` (`TEXT`) | Obligatorio en creación, opcional en edición. Formato estricto **PNG** (`image/png`), máx. 5 MB. Verificación binaria de encabezado (*Magic Bytes*). |
+
+---
+
+## 🔐 Autenticación, Roles (RBAC) y Seguridad
+
+El sistema incluye autenticación mediante contraseñas protegidas con **`scrypt` + `timingSafeEqual`**, tokens firmados con **`HMAC-SHA256`**, cookies **`HttpOnly; SameSite=Strict`**, cabeceras HTTP de seguridad y **Rate Limiting** contra fuerza bruta:
+
+| Perfil | Usuario | Contraseña | Permisos |
+| :--- | :--- | :--- | :--- |
+| **Administrador (`admin`)** | `admin` | `Admin123!` | Visualizar catálogo (`GET`), registrar productos (`POST`) y editar productos (`PUT`). |
+| **Consulta (`viewer`)** | `consulta` | `Consulta123!` | Exclusivamente visualizar y filtrar el catálogo (`GET`). Bloqueado en `POST` y `PUT` (`403 Forbidden`). |
 
 ---
 

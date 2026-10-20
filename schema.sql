@@ -84,3 +84,51 @@ ON storage.objects
 FOR INSERT
 TO public
 WITH CHECK (bucket_id = 'inventory-images');
+
+-- ==============================================================================
+-- 6. Tabla de Usuarios y Control de Acceso Basado en Roles (public.app_users)
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS public.app_users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'viewer')),
+    full_name VARCHAR(100) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_users_username ON public.app_users(username);
+
+DROP TRIGGER IF EXISTS trigger_update_app_users_updated_at ON public.app_users;
+CREATE TRIGGER trigger_update_app_users_updated_at
+BEFORE UPDATE ON public.app_users
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+
+ALTER TABLE public.app_users ENABLE ROW LEVEL SECURITY;
+
+-- Políticas RLS para autenticación y sembrado de usuarios desde el backend
+DROP POLICY IF EXISTS "Permitir lectura de usuarios para autenticacion" ON public.app_users;
+CREATE POLICY "Permitir lectura de usuarios para autenticacion"
+ON public.app_users
+FOR SELECT
+TO public
+USING (true);
+
+DROP POLICY IF EXISTS "Permitir gestion de usuarios desde backend" ON public.app_users;
+CREATE POLICY "Permitir gestion de usuarios desde backend"
+ON public.app_users
+FOR INSERT
+TO public
+WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Permitir actualizacion de usuarios desde backend" ON public.app_users;
+CREATE POLICY "Permitir actualizacion de usuarios desde backend"
+ON public.app_users
+FOR UPDATE
+TO public
+USING (true)
+WITH CHECK (true);

@@ -1,4 +1,5 @@
 import zlib from 'zlib';
+import { hashPassword } from '../utils/security.js';
 
 /**
  * Tabla CRC32 estándar para bloques PNG (IHDR, IDAT, IEND)
@@ -116,4 +117,47 @@ export const getInitialSeedItems = () => {
       updated_at: timestamp
     };
   });
+};
+
+/**
+ * Definición de usuarios semilla con roles diferenciados:
+ * - admin: Puede visualizar, registrar y editar productos del inventario
+ * - viewer (consulta): Solamente puede visualizar productos
+ */
+export const SEED_USERS_DEFINITION = [
+  {
+    id: 'user-seed-admin-01',
+    username: 'admin',
+    plainPasswordForDemo: 'Admin123!',
+    saltHex: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+    role: 'admin',
+    full_name: 'Administrador de Inventario',
+    is_active: true
+  },
+  {
+    id: 'user-seed-viewer-02',
+    username: 'consulta',
+    plainPasswordForDemo: 'Consulta123!',
+    saltHex: 'f0e9d8c7b6a594837261504f3e2d1c0b',
+    role: 'viewer',
+    full_name: 'Usuario de Consulta',
+    is_active: true
+  }
+];
+
+/**
+ * Genera los usuarios iniciales con sus contraseñas hasheadas vía scrypt
+ */
+export const getInitialSeedUsers = () => {
+  const timestamp = new Date().toISOString();
+  return SEED_USERS_DEFINITION.map((u) => ({
+    id: u.id,
+    username: u.username,
+    password_hash: hashPassword(u.plainPasswordForDemo, u.saltHex),
+    role: u.role,
+    full_name: u.full_name,
+    is_active: u.is_active,
+    created_at: timestamp,
+    updated_at: timestamp
+  }));
 };

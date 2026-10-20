@@ -3,7 +3,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import multer from 'multer';
+import authRoutes from './routes/authRoutes.js';
 import inventoryRoutes from './routes/inventoryRoutes.js';
+import { securityHeaders } from './middlewares/authMiddleware.js';
 import { isSupabaseConfigured } from './config/supabase.js';
 
 dotenv.config();
@@ -14,9 +16,12 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware para parsear JSON y formularios URL-encoded
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Cabeceras de seguridad HTTP (Defensa contra XSS, Clickjacking y MIME Sniffing)
+app.use(securityHeaders);
+
+// Middleware para parsear JSON y formularios URL-encoded (con límite de seguridad)
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
 // Servir archivos estáticos del frontend desde la carpeta public
 app.use(express.static(path.join(__dirname, '../public')));
@@ -31,7 +36,10 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Rutas de la API de Inventario
+// Rutas de Autenticación y Sesión
+app.use('/api/auth', authRoutes);
+
+// Rutas de la API de Inventario (Protegidas con RBAC)
 app.use('/api/inventory', inventoryRoutes);
 
 // Manejo centralizado de errores de Multer y del sistema

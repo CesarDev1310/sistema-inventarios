@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { uploadSingleImage } from '../middlewares/uploadMiddleware.js';
+import { authenticateToken, authorizeRoles } from '../middlewares/authMiddleware.js';
 import {
   registerInventoryItem,
   getInventoryItems,
@@ -8,13 +9,13 @@ import {
 
 const router = Router();
 
-// GET /api/inventory - Obtener lista de inventario
-router.get('/', getInventoryItems);
+// GET /api/inventory - Obtener lista de inventario (Accesible para 'admin' y 'viewer')
+router.get('/', authenticateToken, getInventoryItems);
 
-// POST /api/inventory - Registrar nuevo artículo (procesa SKU, Stock e Imagen PNG)
-router.post('/', uploadSingleImage, registerInventoryItem);
+// POST /api/inventory - Registrar nuevo artículo (Exclusivo rol 'admin')
+router.post('/', authenticateToken, authorizeRoles('admin'), uploadSingleImage, registerInventoryItem);
 
-// PUT /api/inventory/:id - Editar un artículo existente (SKU, Stock e Imagen PNG opcional)
-router.put('/:id', uploadSingleImage, updateInventoryItem);
+// PUT /api/inventory/:id - Editar un artículo existente (Exclusivo rol 'admin')
+router.put('/:id', authenticateToken, authorizeRoles('admin'), uploadSingleImage, updateInventoryItem);
 
 export default router;

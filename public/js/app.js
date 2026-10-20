@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ==============================================================================
   // ELEMENTOS DEL DOM
   // ==============================================================================
+  const mainGrid = document.getElementById('main-grid');
   const formCard = document.getElementById('form-card');
   const formBadge = document.getElementById('form-badge');
   const formTitle = document.getElementById('form-title');
@@ -35,10 +36,48 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusText = document.getElementById('status-text');
   const toastContainer = document.getElementById('toast-container');
 
+  // Elementos de Autenticación y Roles (RBAC)
+  const authOverlay = document.getElementById('auth-overlay');
+  const loginForm = document.getElementById('login-form');
+  const loginUsername = document.getElementById('login-username');
+  const loginPassword = document.getElementById('login-password');
+  const btnLogin = document.getElementById('btn-login');
+  const btnLoginSpinner = document.getElementById('btn-login-spinner');
+  const btnFillAdmin = document.getElementById('btn-fill-admin');
+  const btnFillViewer = document.getElementById('btn-fill-viewer');
+  const userSessionBar = document.getElementById('user-session-bar');
+  const userDisplayName = document.getElementById('user-display-name');
+  const userRoleBadge = document.getElementById('user-role-badge');
+  const btnLogout = document.getElementById('btn-logout');
+  const viewerBanner = document.getElementById('viewer-banner');
+
   // Estado local en memoria
   let currentInventory = [];
   let selectedFile = null;
   let editingItem = null;
+  let currentUser = null;
+  let authToken = sessionStorage.getItem('inventory_auth_token') || null;
+
+  /**
+   * Wrapper de fetch que adjunta automáticamente el token Bearer y gestiona expiración 401
+   */
+  const authFetch = async (url, options = {}) => {
+    const headers = { ...(options.headers || {}) };
+    if (authToken) {
+      headers.Authorization = `Bearer ${authToken}`;
+    }
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      credentials: 'same-origin'
+    });
+
+    if (response.status === 401 && !url.includes('/api/auth/')) {
+      handleSessionExpired();
+    }
+
+    return response;
+  };
 
   // ==============================================================================
   // VERIFICACIÓN DEL ESTADO DEL SISTEMA (HEALTH CHECK)
@@ -272,7 +311,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // ==============================================================================
   const fetchInventory = async () => {
     try {
-      const res = await fetch('/api/inventory');
+      const res = await authFetch('/api/inventory');
+      if (res.status === 401) return;
       if (!res.ok) throw new Error('Error al obtener lista de artículos');
       const responseData = await res.json();
 
@@ -325,6 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const isEditingThis = editingItem && editingItem.id === item.id;
+      const isAdmin = currentUser && currentUser.role === 'admin';
 
       return `
         <article class="inventory-item-card ${isEditingThis ? 'is-editing' : ''}" data-sku="${escapeHtml(item.sku)}" data-id="${escapeHtml(item.id)}">
@@ -343,6 +384,9 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div class="item-stock-badge">
             <span class="stock-pill ${stockClass} text-mono">${stockText}</span>
+            ${
+              isAdmin
+                ? `
             <button type="button" class="btn-edit-item" data-edit-id="${escapeHtml(item.id)}" title="Editar ${escapeHtml(item.sku)}">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
@@ -350,6 +394,9 @@ document.addEventListener('DOMContentLoaded', () => {
               </svg>
               <span>Editar</span>
             </button>
+                `
+                : ''
+            }
           </div>
         </article>
       `;
@@ -441,7 +488,7 @@ document.addEventListener('DOMContentLoaded', () => {
         : '/api/inventory';
       const method = isEditMode ? 'PUT' : 'POST';
 
-      const response = await fetch(endpoint, {
+      const response = await authFetch(endpoint, {
         method,
         body: formData
       });
@@ -484,7 +531,136 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // ==============================================================================
+  // AUTENTICACIÓN, CONTROL DE ROLES (RBAC) Y SESIÓN
+  // ==============================================================================
+  const applyUserRoleUI = (user) => {
+    currentUser = user;
+    if (!user) return;
+
+    if (authOverlay) authOverlay.classList.add('hidden');
+    if (userSessionBar) userSessionBar.classList.remove('hidden');
+    if (userDisplayName) userDisplayName.textContent = user.full_name || user.username;
+
+    const isAdmin = user.role === 'admin';
+    if (userRoleBadge) {
+      userRoleBadge.textContent = isAdmin ? 'ADMIN' : 'CONSULTA';
+      userRoleBadge.className = `role-badge ${isAdmin ? 'role-admin' : 'role-viewer'}`;
+    }
+
+    if (isAdmin) {
+      if (formCard) formCard.classList.remove('hidden');
+      if (mainGrid) mainGrid.classList.remove('viewer-mode');
+      if (viewerBanner) viewerBanner.classList.add('hidden');
+    } else {
+      cancelEditMode();
+      if (formCard) formCard.classList.add('hidden');
+      if (mainGrid) mainGrid.classList.add('viewer-mode');
+      if (viewerBanner) viewerBanner.classList.remove('hidden');
+    }
+
+    applyFilterAndRender();
+  };
+
+  const handleSessionExpired = () => {
+    currentUser = null;
+    authToken = null;
+    sessionStorage.removeItem('inventory_auth_token');
+    cancelEditMode();
+    if (userSessionBar) userSessionBar.classList.add('hidden');
+    if (authOverlay) authOverlay.classList.remove('hidden');
+    if (loginUsername) loginUsername.focus();
+  };
+
+  const checkSessionAndInit = async () => {
+    await checkSystemHealth();
+    try {
+      const res = await authFetch('/api/auth/me');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.user) {
+          applyUserRoleUI(data.user);
+          await fetchInventory();
+          return;
+        }
+      }
+    } catch {
+      // Si no hay sesión activa, mostrar pantalla de login
+    }
+    handleSessionExpired();
+  };
+
+  if (loginForm) {
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = loginUsername.value.trim();
+      const password = loginPassword.value;
+
+      if (!username || !password) {
+        showToast('Ingresa tu usuario y contraseña para continuar.', 'error', 'Campos Requeridos');
+        return;
+      }
+
+      if (btnLogin) btnLogin.disabled = true;
+      if (btnLoginSpinner) btnLoginSpinner.classList.remove('hidden');
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+          credentials: 'same-origin'
+        });
+
+        const result = await res.json();
+        if (!res.ok) {
+          throw new Error(result.error || 'No se pudo iniciar sesión.');
+        }
+
+        authToken = result.token;
+        sessionStorage.setItem('inventory_auth_token', authToken);
+        loginForm.reset();
+
+        applyUserRoleUI(result.user);
+        showToast(result.message || 'Sesión iniciada.', 'success', 'Acceso Autorizado');
+        await fetchInventory();
+      } catch (err) {
+        showToast(err.message, 'error', 'Acceso Denegado');
+      } finally {
+        if (btnLogin) btnLogin.disabled = false;
+        if (btnLoginSpinner) btnLoginSpinner.classList.add('hidden');
+      }
+    });
+  }
+
+  if (btnLogout) {
+    btnLogout.addEventListener('click', async () => {
+      try {
+        await authFetch('/api/auth/logout', { method: 'POST' });
+      } catch {
+        // Ignorar errores de red al cerrar sesión local
+      }
+      handleSessionExpired();
+      showToast('Has cerrado sesión correctamente.', 'success', 'Sesión Cerrada');
+    });
+  }
+
+  if (btnFillAdmin) {
+    btnFillAdmin.addEventListener('click', () => {
+      loginUsername.value = 'admin';
+      loginPassword.value = 'Admin123!';
+      loginPassword.focus();
+    });
+  }
+
+  if (btnFillViewer) {
+    btnFillViewer.addEventListener('click', () => {
+      loginUsername.value = 'consulta';
+      loginPassword.value = 'Consulta123!';
+      loginPassword.focus();
+    });
+  }
+
   // Inicialización de la aplicación
-  checkSystemHealth();
-  fetchInventory();
+  checkSessionAndInit();
 });

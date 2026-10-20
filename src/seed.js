@@ -2,17 +2,30 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { supabase, isSupabaseConfigured, SUPABASE_BUCKET } from './config/supabase.js';
-import { SEED_ITEMS_DEFINITION, createColoredPngBuffer, getInitialSeedItems } from './config/seedData.js';
+import {
+  SEED_ITEMS_DEFINITION,
+  SEED_USERS_DEFINITION,
+  createColoredPngBuffer,
+  getInitialSeedItems,
+  getInitialSeedUsers
+} from './config/seedData.js';
 import { isValidSku, isValidStock } from './controllers/inventoryController.js';
+import { isValidUsername } from './controllers/authController.js';
 import { validatePngMagicBytes } from './middlewares/uploadMiddleware.js';
+import { hashPassword, verifyPassword } from './utils/security.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
- * Construye el archivo seed.sql idempotente sincronizado con SEED_ITEMS_DEFINITION
+ * Construye el archivo seed.sql idempotente sincronizado con SEED_USERS_DEFINITION y SEED_ITEMS_DEFINITION
  */
 const generateSeedSqlFile = () => {
+  const userRows = SEED_USERS_DEFINITION.map((u) => {
+    const passwordHash = hashPassword(u.plainPasswordForDemo, u.saltHex);
+    return `  ('${u.username}', '${passwordHash}', '${u.role}', '${u.full_name}', ${u.is_active}, NOW(), NOW())`;
+  }).join(',\n');
+
   const valueRows = SEED_ITEMS_DEFINITION.map((item) => {
     const pngBuffer = createColoredPngBuffer(...item.color);
     const dataUri = `data:image/png;base64,${pngBuffer.toString('base64')}`;
@@ -20,18 +33,31 @@ const generateSeedSqlFile = () => {
   }).join(',\n');
 
   const sqlContent = `-- ==============================================================================
--- SEED DATA: Módulo de Registro de Inventario
--- Tabla objetivo: public.inventory_items (definida en schema.sql)
+-- SEED DATA: Módulo de Registro de Inventario y Control de Acceso (RBAC)
+-- Tablas objetivo: public.app_users y public.inventory_items (definidas en schema.sql)
 -- ==============================================================================
 -- Nota: Operación idempotente (ON CONFLICT DO UPDATE). Segura para re-ejecución.
--- Incluye 10 artículos de prueba cubriendo los 3 estados de inventario:
---   * Disponible (stock > 5)
---   * Stock Bajo (1 <= stock <= 5)
---   * Agotado    (stock = 0)
--- Las imágenes son archivos PNG reales (Magic Bytes 89 50 4E 47 0D 0A 1A 0A)
--- codificados en Data URI Base64 para visualización inmediata en la interfaz.
+--
+-- 1. USUARIOS SEMILLA (public.app_users):
+--    * admin    (Rol: 'admin'  | Contraseña: Admin123!)    -> Lectura, Creación y Edición
+--    * consulta (Rol: 'viewer' | Contraseña: Consulta123!) -> Solo Lectura
+--
+-- 2. ARTÍCULOS SEMILLA (public.inventory_items):
+--    * 10 productos cubriendo estados Disponible (>5), Stock Bajo (1..5) y Agotado (0).
 -- ==============================================================================
 
+-- 1. Sembrado de Usuarios y Roles (public.app_users)
+INSERT INTO public.app_users (username, password_hash, role, full_name, is_active, created_at, updated_at)
+VALUES
+${userRows}
+ON CONFLICT (username) DO UPDATE SET
+  password_hash = EXCLUDED.password_hash,
+  role = EXCLUDED.role,
+  full_name = EXCLUDED.full_name,
+  is_active = EXCLUDED.is_active,
+  updated_at = NOW();
+
+-- 2. Sembrado de Catálogo de Inventario (public.inventory_items)
 INSERT INTO public.inventory_items (sku, stock, image_url, created_at, updated_at)
 VALUES
 ${valueRows}
@@ -51,7 +77,7 @@ const runSeed = async () => {
   console.log(`🌱 EJECUTANDO GENERADOR DE DATA DE PRUEBA (SEED)`);
   console.log(`========================================================\n`);
 
-  // 1. Validación estricta de reglas de negocio sobre los datos semilla
+  // 1. Validación estricta de reglas de negocio sobre los datos semilla de inventario
   for (const item of SEED_ITEMS_DEFINITION) {
     const pngBuffer = createColoredPngBuffer(...item.color);
 
@@ -66,15 +92,54 @@ const runSeed = async () => {
     }
   }
 
-  console.log(`✅ Validación de integridad superada para ${SEED_ITEMS_DEFINITION.length} registros (SKU, Stock >= 0, Magic Bytes PNG).`);
+  // 2. Validación de usuarios semilla y hashes scrypt
+  for (const u of SEED_USERS_DEFINITION) {
+    if (!isValidUsername(u.username)) {
+      throw new Error(`Username inválido en data semilla: ${u.username}`);
+    }
+    if (!['admin', 'viewer'].includes(u.role)) {
+      throw new Error(`Rol inválido para ${u.username}: ${u.role}`);
+    }
+    const generatedHash = hashPassword(u.plainPasswordForDemo, u.saltHex);
+    if (!verifyPassword(u.plainPasswordForDemo, generatedHash)) {
+      throw new Error(`Fallo en verificación criptográfica scrypt para ${u.username}`);
+    }
+  }
 
-  // 2. Generar/sincronizar seed.sql para Supabase SQL Editor
+  console.log(
+    `✅ Validación de integridad superada: ${SEED_USERS_DEFINITION.length} usuarios RBAC y ${SEED_ITEMS_DEFINITION.length} productos (SKU, Stock >= 0, Magic Bytes PNG).`
+  );
+
+  // 3. Generar/sincronizar seed.sql para Supabase SQL Editor
   const sqlPath = generateSeedSqlFile();
   console.log(`📄 Script SQL idempotente sincronizado en: ${sqlPath}`);
 
-  // 3. Si Supabase está configurado, poblar Storage + tabla public.inventory_items
+  // 4. Si Supabase está configurado, poblar Usuarios + Storage + Inventario
   if (isSupabaseConfigured && supabase) {
-    console.log(`📡 Conectado a Supabase. Sincronizando Storage (${SUPABASE_BUCKET}) y tabla public.inventory_items...\n`);
+    console.log(`📡 Conectado a Supabase. Sincronizando usuarios, Storage (${SUPABASE_BUCKET}) e inventario...\n`);
+
+    const seedUsers = getInitialSeedUsers();
+    for (const u of seedUsers) {
+      const { error: userErr } = await supabase
+        .from('app_users')
+        .upsert(
+          {
+            username: u.username,
+            password_hash: u.password_hash,
+            role: u.role,
+            full_name: u.full_name,
+            is_active: u.is_active,
+            updated_at: new Date().toISOString()
+          },
+          { onConflict: 'username' }
+        );
+
+      if (userErr) {
+        console.warn(`   ⚠️ Aviso al sincronizar usuario [${u.username}] en Supabase: ${userErr.message} (Ejecuta schema.sql en Supabase si aún no existe la tabla app_users).`);
+      } else {
+        console.log(`   👤 Usuario [${u.username}] sincronizado (Rol: ${u.role})`);
+      }
+    }
 
     let insertedCount = 0;
 
@@ -125,11 +190,21 @@ const runSeed = async () => {
     return;
   }
 
-  // 4. Modo Local / Demo
+  // 5. Modo Local / Demo
   const localItems = getInitialSeedItems();
   const totalStock = localItems.reduce((acc, item) => acc + item.stock, 0);
 
-  console.log(`🟡 Modo Local / Demo activo: Los ${localItems.length} registros están precargados automáticamente en memoria.\n`);
+  console.log(`🟡 Modo Local / Demo activo: Usuarios y productos están precargados en memoria.\n`);
+
+  console.table(
+    SEED_USERS_DEFINITION.map(({ username, role, full_name, plainPasswordForDemo }) => ({
+      username,
+      password_demo: plainPasswordForDemo,
+      role,
+      permisos: role === 'admin' ? 'Lectura + Crear + Editar' : 'Solo Lectura (Consulta)',
+      full_name
+    }))
+  );
 
   console.table(
     localItems.map(({ id, sku, stock, created_at }) => ({
